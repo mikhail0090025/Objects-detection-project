@@ -1,58 +1,131 @@
 import torch.nn as nn
 import torch.optim as optim
-
 import torch
-from torch.utils.data import Dataset, DataLoader
 from PIL import Image
-import os
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+import numpy as np
+from get_dataset import input_images, outputs, max_objects_per_img, categories_count  # Предполагаем, что эти переменные экспортированы
 
-class CustomObjectDataset(Dataset):
-    def __init__(self, images_dir, labels_dir, transform=None):
-        self.images_dir = images_dir
-        self.labels_dir = labels_dir
-        self.transform = transform
-        self.image_files = [f for f in os.listdir(images_dir) if f.endswith('.jpg')]
-        self.image_files.sort()  # Для согласованности
+# Определяем output_shape
+output_shape = (max_objects_per_img, 4 + categories_count)
+
+class LearningDataset(Dataset):
+    def __init__(self, images, annotations):
+        # Преобразуем изображения
+        self.images = torch.tensor(images, dtype=torch.float32).permute(0, 3, 1, 2)  # (N, H, W, C) → (N, C, H, W)
+        # Преобразуем аннотации в фиксированный тензор
+        self.annotations = torch.zeros((len(annotations), max_objects_per_img, 4 + categories_count), dtype=torch.float32)
+        print(annotations.shape)
+        for i, (_, anns) in enumerate(annotations):
+            for j, ann in enumerate(anns):
+                if j >= max_objects_per_img:
+                    break
+                self.annotations[i, j] = torch.tensor(ann, dtype=torch.float32)
 
     def __len__(self):
-        return len(self.image_files)
+        return len(self.images)
 
     def __getitem__(self, idx):
-        img_name = self.image_files[idx]
-        img_path = os.path.join(self.images_dir, img_name)
-        label_path = os.path.join(self.labels_dir, os.path.splitext(img_name)[0] + '.txt')
+        image = self.images[idx]
+        annotation = self.annotations[idx]
+        return image, annotation
 
-        # Загружаем изображение
-        image = Image.open(img_path).convert("RGB")
-        
-        # Читаем аннотации
-        boxes = []
-        with open(label_path, 'r') as f:
-            for line in f.readlines():
-                class_id, x_center, y_center, width, height = map(float, line.strip().split())
-                boxes.append([class_id, x_center, y_center, width, height])
-        
-        boxes = torch.tensor(boxes, dtype=torch.float32)
+class ObjectsDetector(nn.Module):
+    def __init__(self):
+        super(ObjectsDetector, self).__init__()
+        self.backbone = nn.Sequential(
+            nn.Conv2d(3, 32, 3, padding=1, stride=2),  # 200x200 => 100x100
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(32, 64, 3, padding=1, stride=2),  # 100x100 => 50x50
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 64, 3, padding=1, stride=2),  # 50x50 => 25x25
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 64, 3, padding=1, stride=2),  # 25x25 => 13x13
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 16, 3, padding=1, stride=1),  # 13x13 => 13x13
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(0.2),
+        )
+        self.head = nn.Sequential(
+            nn.Conv2d(16, 4 + categories_count, 3, padding=1),  # 13x13 => 13x13
+            nn.BatchNorm2d(4 + categories_count),
+            nn.LeakyReLU(0.2),
+            nn.Flatten(),
+            nn.Linear(13 * 13 * (4 + categories_count), max_objects_per_img * (4 + categories_count)),
+            nn.Unflatten(1, (max_objects_per_img, 4 + categories_count)),
+            nn.Sigmoid()  # Нормализация [0, 1] для координат и классов
+        )
 
-        if self.transform:
-            image = self.transform(image)
+    def forward(self, x):
+        x = self.backbone(x)
+        x = self.head(x)
+        return x
 
-        return image, boxes
+class FullDetector(nn.Module):
+    def __init__(self):
+        super(FullDetector, self).__init__()
+        self.objects_detector = ObjectsDetector()
 
-# Пример трансформации
-from torchvision import transforms
+    def forward(self, x):
+        return self.objects_detector(x)
 
-transform = transforms.Compose([
-    transforms.Resize((200, 200)),  # Уже ресайзим в 200x200
-    transforms.ToTensor(),          # Конвертируем в тензор [0, 1]
-])
+# Инициализация
+dataset = LearningDataset(input_images, outputs)
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+detector = FullDetector().to(device)
+optim_detector = optim.Adam(detector.parameters(), lr=0.0001)
 
-# Создание датасета и загрузчика
-dataset = CustomObjectDataset(images_dir="dataset/images", labels_dir="dataset/labels", transform=transform)
-dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=0)
+# Кастомная потеря для детекции
+class DetectionLoss(nn.Module):
+    def __init__(self):
+        super(DetectionLoss, self).__init__()
+        self.bce_loss = nn.BCELoss()  # Для классов
+        self.mse_loss = nn.MSELoss()  # Для координат
 
-# Пример использования
-for images, targets in dataloader:
-    print("Images shape:", images.shape)  # [batch_size, 3, 200, 200]
-    print("Targets shape:", targets.shape)  # [batch_size, num_objects, 5]
-    break
+    def forward(self, pred, target):
+        batch_size = pred.size(0)
+        loss = 0
+        for i in range(batch_size):
+            pred_boxes = pred[i, :, :4]  # Координаты
+            target_boxes = target[i, :, :4]
+            pred_classes = pred[i, :, 4:]  # Классы
+            target_classes = target[i, :, 4:]
+
+            # Маска для существующих объектов
+            mask = (target_boxes.sum(dim=1) > 0).float()  # 1, если объект есть
+            if mask.sum() == 0:  # Если объектов нет
+                continue
+
+            # Потери для координат
+            box_loss = self.mse_loss(pred_boxes[mask.bool()], target_boxes[mask.bool()])
+            # Потери для классов
+            class_loss = self.bce_loss(pred_classes[mask.bool()], target_classes[mask.bool()])
+            loss += (box_loss + class_loss) / mask.sum()
+        return loss / batch_size
+
+loss_fn = DetectionLoss()
+
+# Тренировка
+def one_epoch():
+    detector.train()
+    epoch_loss = 0
+    for i, (images, targets) in enumerate(dataloader):
+        images, targets = images.to(device), targets.to(device)
+        optim_detector.zero_grad()
+        output = detector(images)
+        loss = loss_fn(output, targets)
+        loss.backward()
+        optim_detector.step()
+        epoch_loss += loss.item()
+        print(f"Batch {i+1}/{len(dataloader)}: Loss: {loss.item():.4f}")
+    epoch_loss = epoch_loss / len(dataloader)
+    print(f"Epoch loss: {epoch_loss:.4f}")
+    return epoch_loss
+
+# Запуск
+one_epoch()
