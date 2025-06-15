@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <link rel="stylesheet" href="static/styles.css">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <h2>Objects detection</h2>
+    <div id="graph"></div>
+    <script>
+        fetch('/get_graphics')
+            .then(response => response.json())
+            .then(data => {
+                // Парсим JSON графика
+                Plotly.react('graph', JSON.parse(data.graph), {});
+            })
+            .catch(error => console.error('Error:', error));
+    </script>
+</body>
+</html>

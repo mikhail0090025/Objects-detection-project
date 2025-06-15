@@ -1,0 +1,193 @@
+{
+  "images": [
+    {
+      "file": "IMG_20250615_154406.jpg",
+      "annotations": [
+        {"class": "led", "box": [693, 720, 1413, 1138]},
+        {"class": "transistor", "box": [2080, 852, 2508, 1166]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154414.jpg",
+      "annotations": [
+        {"class": "led", "box": [1263, 606, 2133, 1140]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154419.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [1227, 894, 1869, 1281]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154516.jpg",
+      "annotations": [
+        {"class": "led", "box": [618, 420, 831, 615]},
+        {"class": "led", "box": [1638, 1386, 1845, 1600]},
+        {"class": "led", "box": [1770, 444, 1992, 642]},
+        {"class": "transistor", "box": [2271, 582, 2490, 711]},
+        {"class": "transistor", "box": [2574, 1077, 2784, 1212]},
+        {"class": "transistor", "box": [2856, 477, 3057, 609]},
+        {"class": "transistor", "box": [3312, 930, 3540, 1068]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154532.jpg",
+      "annotations": [
+        {"class": "led", "box": [1086, 735, 1302, 870]},
+        {"class": "led", "box": [2000, 822, 2210, 990]},
+        {"class": "led", "box": [2990, 462, 3195, 585]},
+        {"class": "transistor", "box": [1425, 219, 1557, 345]},
+        {"class": "transistor", "box": [2076, 372, 2241, 495]},
+        {"class": "transistor", "box": [1470, 1437, 1626, 1590]},
+        {"class": "transistor", "box": [2676, 1000, 2844, 1140]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154601.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [648, 576, 804, 690]},
+        {"class": "transistor", "box": [3189, 1326, 3351, 1428]},
+        {"class": "led", "box": [2860, 879, 3081, 1000]},
+        {"class": "led", "box": [957, 1203, 1180, 1377]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154645.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [1194, 225, 1365, 327]},
+        {"class": "transistor", "box": [1098, 1386, 1206, 1566]},
+        {"class": "led", "box": [1077, 681, 1293, 858]},
+        {"class": "led", "box": [2631, 522, 2802, 711]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154701.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [1029, 783, 1200, 888]},
+        {"class": "led", "box": [1119, 249, 1278, 396]},
+        {"class": "led", "box": [1833, 729, 2031, 894]},
+        {"class": "led", "box": [2560, 330, 2775, 519]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154719.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [765, 807, 918, 903]},
+        {"class": "transistor", "box": [1494, 765, 1653, 882]},
+        {"class": "transistor", "box": [2151, 240, 2295, 390]},
+        {"class": "led", "box": [858, 234, 1023, 417]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154731.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [2259, 600, 2442, 700]},
+        {"class": "transistor", "box": [1209, 1300, 1383, 1410]},
+        {"class": "led", "box": [1311, 432, 1569, 540]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154742.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [2067, 423, 2316, 540]},
+        {"class": "transistor", "box": [720, 1341, 948, 1470]},
+        {"class": "transistor", "box": [2118, 1446, 2325, 1596]},
+        {"class": "led", "box": [1311, 672, 1626, 852]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154751.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [2325, 531, 2550, 663]},
+        {"class": "transistor", "box": [972, 1400, 1176, 1536]},
+        {"class": "led", "box": [804, 216, 1167, 360]},
+        {"class": "led", "box": [2172, 1407, 2520, 1617]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154804.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [1695, 250, 1857, 372]},
+        {"class": "transistor", "box": [2250, 564, 2478, 660]},
+        {"class": "transistor", "box": [1083, 1275, 1300, 1383]},
+        {"class": "led", "box": [951, 306, 1260, 426]},
+        {"class": "led", "box": [2085, 1260, 2409, 1431]},
+        {"class": "led", "box": [2865, 210, 3117, 405]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154825.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [1119, 423, 1431, 663]},
+        {"class": "led", "box": [2600, 702, 3273, 1182]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154836.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [1305, 234, 1521, 534]},
+        {"class": "led", "box": [876, 1089, 1500, 1480]},
+        {"class": "led", "box": [2124, 990, 2500, 1400]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154847.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [1323, 201, 1524, 500]},
+        {"class": "transistor", "box": [888, 1300, 1236, 1600]},
+        {"class": "led", "box": [810, 573, 1500, 780]},
+        {"class": "led", "box": [2190, 880, 2571, 1383]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154907.jpg",
+      "annotations": [
+        {"class": "led", "box": [1047, 270, 1356, 504]},
+        {"class": "led", "box": [1233, 1248, 1480, 1548]},
+        {"class": "led", "box": [2652, 756, 2922, 948]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154914.jpg",
+      "annotations": [
+        {"class": "led", "box": [1500, 260, 1848, 516]},
+        {"class": "led", "box": [483, 906, 675, 1218]},
+        {"class": "led", "box": [2652, 1188, 3021, 1347]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154918.jpg",
+      "annotations": [
+        {"class": "led", "box": [1215, 303, 1410, 612]},
+        {"class": "led", "box": [2313, 102, 2556, 339]},
+        {"class": "led", "box": [2946, 1317, 3309, 1524]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154950.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [1488, 321, 1608, 519]},
+        {"class": "transistor", "box": [816, 1068, 951, 1300]},
+        {"class": "transistor", "box": [1821, 744, 1974, 969]},
+        {"class": "transistor", "box": [2634, 1300, 2828, 1488]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_154958.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [657, 549, 930, 765]},
+        {"class": "transistor", "box": [1893, 576, 2067, 756]},
+        {"class": "transistor", "box": [2817, 927, 3030, 1158]}
+      ]
+    },
+    {
+      "file": "IMG_20250615_155007.jpg",
+      "annotations": [
+        {"class": "transistor", "box": [2193, 117, 2427, 252]},
+        {"class": "transistor", "box": [2040, 651, 2325, 780]},
+        {"class": "transistor", "box": [1950, 1527, 2250, 1716]}
+      ]
+    }
+  ]
+}

@@ -91,6 +91,9 @@ for output in outputs:
 print(len(outputs))
 outputs = [output[1] for output in outputs]
 
+spots_of_interest = [[[item_ for item_ in row[:4]] for row in output] for output in outputs]
+classes = [[[item_ for item_ in row[4:]] for row in output] for output in outputs]
+
 outputs = np.array(outputs)
 
 print("Input images shape:", input_images.shape)
