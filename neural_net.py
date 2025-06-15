@@ -5,63 +5,60 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 import numpy as np
-from get_dataset import input_images, spots_of_interest, max_objects_per_img, categories_count
+# from get_dataset import input_images, spots_of_interest, max_objects, categories_count
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+from my_dataset_handler import all_images, start_size, initial_size, max_objects
 
 class SpotsOfInterestDataset(Dataset):
-    def __init__(self, images, annotations):
+    def __init__(self, all_images):
+        self.inputs = np.array([img.image for img in all_images])
+        self.outputs = np.array([img.output for img in all_images])
         # Преобразуем изображения
-        self.images = torch.tensor(images, dtype=torch.float32).permute(0, 3, 1, 2)  # (N, H, W, C) → (N, C, H, W)
-        # Преобразуем аннотации в фиксированный тензор
-        self.annotations = torch.zeros((len(annotations), max_objects_per_img, 4), dtype=torch.float32)
-        for i, anns in enumerate(annotations):
-            for j, ann in enumerate(anns):
-                if j >= max_objects_per_img:
-                    break
-                self.annotations[i, j] = torch.tensor(ann, dtype=torch.float32)
+        self.inputs = torch.tensor(self.inputs, dtype=torch.float32).permute(0, 3, 1, 2)  # (N, H, W, C) → (N, C, H, W)
+        self.outputs = torch.tensor(self.outputs, dtype=torch.float32)
 
     def __len__(self):
-        return len(self.images)
+        return len(self.inputs)
 
     def __getitem__(self, idx):
-        image = self.images[idx]
-        annotation = self.annotations[idx]
+        image = self.inputs[idx]
+        annotation = self.outputs[idx]
         return image, annotation
 
 class ObjectsDetector(nn.Module):
     def __init__(self):
         super(ObjectsDetector, self).__init__()
         self.backbone = nn.Sequential(
-            nn.Conv2d(3, 16, 3, padding=1, stride=2),  # 200x200 => 100x100
+            nn.Conv2d(3, 16, 3, padding=1, stride=2),  # 1008x477 => 504x238
             nn.BatchNorm2d(16),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(16, 32, 3, padding=1, stride=1),  # 100x100 => 100x100
+            nn.Conv2d(16, 32, 3, padding=1, stride=1),  # 504x238 => 504x238
             nn.BatchNorm2d(32),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 32, 3, padding=1, stride=2),  # 100x100 => 50x50
+            nn.Conv2d(32, 32, 3, padding=1, stride=2),  # 504x238 => 252x119
             nn.BatchNorm2d(32),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 64, 3, padding=1, stride=1),  # 50x50 => 50x50
+            nn.Conv2d(32, 64, 3, padding=1, stride=1),  # 252x119 => 252x119
             nn.BatchNorm2d(64),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 64, 3, padding=1, stride=2),  # 50x50 => 25x25
+            nn.Conv2d(64, 64, 3, padding=1, stride=2),  # 252x119 => 126x60
             nn.BatchNorm2d(64),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 128, 3, padding=1, stride=1),  # 25x25 => 25x25
+            nn.Conv2d(64, 128, 3, padding=1, stride=1),  # 126x60 => 126x60
             nn.BatchNorm2d(128),
             nn.LeakyReLU(0.2),
         )
         self.head = nn.Sequential(
-            nn.Conv2d(128, 32, 3, padding=1),  # 25x25 => 25x25
+            nn.Conv2d(128, 32, 3, padding=1),  # 126x60 => 126x60
             nn.BatchNorm2d(32),
             nn.LeakyReLU(0.2),
             nn.Flatten(),
-            nn.Linear(25 * 25 * 32, max_objects_per_img * 4),
-            nn.Linear(max_objects_per_img * 4, max_objects_per_img * 4),
-            nn.Linear(max_objects_per_img * 4, max_objects_per_img * 4),
-            nn.Unflatten(1, (max_objects_per_img, 4)),
+            nn.Linear(126 * 60 * 32, max_objects * 4),
+            nn.Linear(max_objects * 4, max_objects * 4),
+            nn.Linear(max_objects * 4, max_objects * 4),
+            nn.Unflatten(1, (max_objects, 4)),
             nn.Sigmoid()
         )
 
@@ -90,12 +87,12 @@ class RMSELoss(nn.Module):
         return rmse
 
 # Инициализация
-train_images, val_images, train_outputs, val_outputs = train_test_split(
-    input_images, spots_of_interest, test_size=0.2, random_state=42
+train_images, val_images = train_test_split(
+    all_images, test_size=0.2, random_state=42
 )
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-train_dataset = SpotsOfInterestDataset(train_images, train_outputs)
-val_dataset = SpotsOfInterestDataset(val_images, val_outputs)
+train_dataset = SpotsOfInterestDataset(train_images)
+val_dataset = SpotsOfInterestDataset(val_images)
 train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 detector = FullDetector().to(device)

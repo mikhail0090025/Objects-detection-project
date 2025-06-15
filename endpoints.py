@@ -74,19 +74,22 @@ def get_graphics_endpoint():
             x=[i + 1 for i in range(len(nn.all_losses))],
             y=nn.all_losses,
             mode='lines+markers',
-            name='Loss'
+            name='Loss',
+            fill='tozeroy',
         ))
         fig.add_trace(go.Scatter(
             x=[i + 1 for i in range(len(nn.all_val_losses))],
             y=nn.all_val_losses,
             mode='lines+markers',
-            name='Validation loss'
+            name='Validation loss',
+            fill='tozeroy',
         ))
         fig.update_layout(
             title="Loss Graph",
             xaxis_title="Epoch",
             yaxis_title="Loss",
-            template="plotly_dark"
+            template="plotly_dark",
+            yaxis=dict(range=[0, None])
         )
 
         # Конвертируем в JSON
@@ -129,9 +132,10 @@ import torch
 @app.get("/process_image")
 async def process_image(url: str):
     try:
+        from my_dataset_handler import start_size
         # Определяем трансформации
         transform = transforms.Compose([
-            transforms.Resize((200, 200)),  # Сжатие до 200x200
+            transforms.Resize(start_size),  # Сжатие до 200x200
             transforms.ToTensor(),          # Преобразование в тензор
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # Нормализация в [-1, 1]
         ])
