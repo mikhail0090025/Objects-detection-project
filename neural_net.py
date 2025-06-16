@@ -28,39 +28,63 @@ class SpotsOfInterestDataset(Dataset):
         annotation = self.outputs[idx]
         return image, annotation
 
-class ObjectsDetector(nn.Module):
-    def __init__(self):
-        super(ObjectsDetector, self).__init__()
-        self.backbone = nn.Sequential(
-            nn.Conv2d(3, 16, 3, padding=1, stride=2),  # 1008x477 => 504x238
-            nn.BatchNorm2d(16),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(16, 32, 3, padding=1, stride=1),  # 504x238 => 504x238
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 32, 3, padding=1, stride=2),  # 504x238 => 252x119
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 32, 3, padding=1, stride=1),  # 252x119 => 252x119
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(0.2),
-        )
-        self.head = nn.Sequential(
-            nn.Conv2d(32, 8, 3, padding=1),  # 126x60 => 126x60
-            nn.BatchNorm2d(8),
-            nn.LeakyReLU(0.2),
-            nn.Flatten(),
-            nn.Linear(252 * 120 * 8, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, max_objects * 4),
-            nn.Unflatten(1, (max_objects, 4)),
-            nn.Sigmoid()
-        )
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1, stride=stride)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.LeakyReLU(0.2)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1, stride=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.downsample = nn.Sequential() if stride == 1 and in_channels == out_channels else \
+                          nn.Sequential(
+                              nn.Conv2d(in_channels, out_channels, 1, stride=stride),
+                              nn.BatchNorm2d(out_channels)
+                          )
 
     def forward(self, x):
-        x = self.backbone(x)
-        x = self.head(x)
-        x = x.clamp(0, 1)
+        identity = self.downsample(x)
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out += identity
+        out = self.relu(out)
+        return out
+
+class ObjectsDetector(nn.Module):
+    def __init__(self, max_objects=7):
+        super(ObjectsDetector, self).__init__()
+        # Backbone с остаточными связями
+        self.backbone = nn.Sequential(
+            nn.Conv2d(3, 32, 3, padding=1, stride=1),  # 800x400 => 800x400
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(0.2),
+            ResidualBlock(32, 32, stride=2),  # 800x400 => 400x200
+            ResidualBlock(32, 64, stride=2),  # 400x200 => 200x100
+            ResidualBlock(64, 64, stride=1),  # 200x100 => 200x100
+        )
+        # Head для предсказания боксов
+        self.head = nn.Sequential(
+            nn.Conv2d(64, 32, 3, padding=1),  # 200x100 => 200x100
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(32, 16, 3, padding=1),  # 200x100 => 200x100
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(16, 4, 3, padding=1),  # 200x100 => 200x100 (4 канала для боксов)
+            nn.Sigmoid()
+        )
+        self.max_objects = max_objects
+
+    def forward(self, x):
+        x = self.backbone(x)  # (batch_size, 64, 252, 119)
+        x = self.head(x)  # (batch_size, 4, 252, 119)
+        # Глобальный пулинг для получения фиксированного числа боксов
+        x = x.mean([2, 3])  # (batch_size, 4) -> усредняем по пространству
+        x = x.view(x.size(0), self.max_objects, 4)  # (batch_size, max_objects, 4)
+        x = x.clamp(0, 1)  # Ограничиваем [0, 1]
         return x
 
 class FullDetector(nn.Module):

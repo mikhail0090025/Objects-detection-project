@@ -6,7 +6,7 @@ from PIL import Image
 path_to_annotations = os.path.join('MyDataset', 'annotations.json')
 annotations = None
 initial_size = (1008 * 4, 477 * 4)
-start_size = (1008, 477)
+start_size = (800, 400)
 max_objects = 7
 all_images = []
 
@@ -26,7 +26,6 @@ class OneObject:
             self.output.append(obj_box)
         while len(self.output) < max_objects:
             self.output.append([0,0,0,0])
-        print(self.output)
         
         self.output = np.array(self.output)
     
