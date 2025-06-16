@@ -16,32 +16,44 @@ class OneObject:
         self.image = (np.array(img) / 127.5).astype(np.float32) - 1
         self.output = []
         for annotation in annotations:
-            obj_class = annotation['class']
             obj_box = annotation['box']
-            obj_box[0] = obj_box[0] / initial_size[0]
-            obj_box[2] = obj_box[2] / initial_size[0]
-            obj_box[1] = obj_box[1] / initial_size[1]
-            obj_box[3] = obj_box[3] / initial_size[1]
+            obj_class = annotation['class']
+            if max(obj_box) > 1:
+                obj_box[0] = obj_box[0] / initial_size[0]
+                obj_box[2] = obj_box[2] / initial_size[0]
+                obj_box[1] = obj_box[1] / initial_size[1]
+                obj_box[3] = obj_box[3] / initial_size[1]
             self.output.append(obj_box)
         while len(self.output) < max_objects:
             self.output.append([0,0,0,0])
+        print(self.output)
         
         self.output = np.array(self.output)
     
-    def flip(self, x: bool, y: bool):
+    def flip(self, x: bool = False, y: bool = False):
+        # Создаём копию изображения для избежания побочных эффектов
+        flipped_image = np.copy(self.image)
+        flipped_output = np.copy(self.output)
+        
+        # Горизонтальный переворот
         if x:
-            self.image = [np.flip(row) for row in self.image]
-            for box in self.output:
-                box[0] = 1 - box[0]
-                box[2] = 1 - box[2]
-                box[0], box[2] = box[2], box[0]
-        if y:
-            self.image = np.flip(self.image)
-            for box in self.output:
-                box[1] = 1 - box[1]
-                box[3] = 1 - box[3]
-                box[1], box[3] = box[1], box[3]
+            flipped_image = np.flip(flipped_image, axis=1)  # По ширине
+            for box in flipped_output:
+                if box.sum() > 0:
+                    box[0], box[2] = 1 - box[2], 1 - box[0]  # Инверсия xmin и xmax
 
+        # Вертикальный переворот
+        if y:
+            flipped_image = np.flip(flipped_image, axis=0)  # По высоте
+            for box in flipped_output:
+                if box.sum() > 0:
+                    box[1], box[3] = 1 - box[3], 1 - box[1]  # Инверсия ymin и ymax
+
+        # Обновляем только если был флип
+        if x or y:
+            self.image = flipped_image
+            self.output = flipped_output
+            print(self.output)
 
 def build_dataset():
     global all_images
@@ -54,6 +66,12 @@ def build_dataset():
         image_path = os.path.join('MyDataset', image_name)
         print(f"Image name: {image_name}")
         all_images.append(OneObject(image_path, image_annotations))
+        all_images.append(OneObject(image_path, image_annotations))
+        all_images.append(OneObject(image_path, image_annotations))
+        all_images.append(OneObject(image_path, image_annotations))
+        all_images[-1].flip(True, True)
+        all_images[-2].flip(False, True)
+        all_images[-3].flip(True, False)
 
     all_images = np.array(all_images)
 
@@ -70,30 +88,10 @@ def load_dataset():
     else:
         raise ValueError("File was not found")
 
-def add_all_flipped_variants():
-    global all_images
-    if all_images is not None and len(all_images) > 0:
-        x_flipped = np.copy(all_images)
-        y_flipped = np.copy(all_images)
-        xy_flipped = np.copy(all_images)
-        for img in x_flipped:
-            img.flip(True, False)
-        for img in y_flipped:
-            img.flip(False, True)
-        for img in xy_flipped:
-            img.flip(True, True)
-        all_images = np.append(all_images, x_flipped)
-        all_images = np.append(all_images, y_flipped)
-        all_images = np.append(all_images, xy_flipped)
-        print(f"all_images: {len(all_images)}")
-    else:
-        raise ValueError("all_images is None or empty")
-
 if os.path.exists("dataset.npz"):
     load_dataset()
 else:
     build_dataset()
-    add_all_flipped_variants()
     save_dataset()
 
 print("Dataset is ready")

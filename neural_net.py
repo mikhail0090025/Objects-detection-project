@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from my_dataset_handler import all_images, start_size, initial_size, max_objects
+import math
 
 class SpotsOfInterestDataset(Dataset):
     def __init__(self, all_images):
@@ -40,24 +41,18 @@ class ObjectsDetector(nn.Module):
             nn.Conv2d(32, 32, 3, padding=1, stride=2),  # 504x238 => 252x119
             nn.BatchNorm2d(32),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 64, 3, padding=1, stride=1),  # 252x119 => 252x119
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 64, 3, padding=1, stride=2),  # 252x119 => 126x60
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 128, 3, padding=1, stride=1),  # 126x60 => 126x60
-            nn.BatchNorm2d(128),
+            nn.Conv2d(32, 32, 3, padding=1, stride=1),  # 252x119 => 252x119
+            nn.BatchNorm2d(32),
             nn.LeakyReLU(0.2),
         )
         self.head = nn.Sequential(
-            nn.Conv2d(128, 32, 3, padding=1),  # 126x60 => 126x60
-            nn.BatchNorm2d(32),
+            nn.Conv2d(32, 8, 3, padding=1),  # 126x60 => 126x60
+            nn.BatchNorm2d(8),
             nn.LeakyReLU(0.2),
             nn.Flatten(),
-            nn.Linear(126 * 60 * 32, max_objects * 4),
-            nn.Linear(max_objects * 4, max_objects * 4),
-            nn.Linear(max_objects * 4, max_objects * 4),
+            nn.Linear(252 * 120 * 8, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, max_objects * 4),
             nn.Unflatten(1, (max_objects, 4)),
             nn.Sigmoid()
         )
@@ -86,6 +81,36 @@ class RMSELoss(nn.Module):
         rmse = torch.sqrt(l1 + 1e-7)
         return rmse
 
+class CustomDistanceLoss(nn.Module):
+    def __init__(self, max_objects=7):
+        super(CustomDistanceLoss, self).__init__()
+        self.max_objects = max_objects
+
+    def forward(self, pred_boxes, target_boxes):
+        loss = 0
+        for pred, target in zip(pred_boxes, target_boxes):
+            # valid_pred = pred[pred.sum(dim=1) > 0]  # Фильтруем нулевые
+            # valid_target = target[target.sum(dim=1) > 0]
+            valid_pred = pred
+            valid_target = target
+            if len(valid_pred) > 0 and len(valid_target) > 0:
+                # Центр бокса для расстояния
+                print('--------------------')
+                print('valid_pred')
+                print(valid_pred)
+                print('valid_target')
+                print(valid_target)
+                print('--------------------')
+                pred_center_x = (valid_pred[:, 0] + valid_pred[:, 2]) / 2
+                pred_center_y = (valid_pred[:, 1] + valid_pred[:, 3]) / 2
+                target_center_x = (valid_target[:, 0] + valid_target[:, 2]) / 2
+                target_center_y = (valid_target[:, 1] + valid_target[:, 3]) / 2
+                # Евклидово расстояние
+                distance = torch.sqrt((pred_center_x - target_center_x) ** 2 + 
+                                    (pred_center_y - target_center_y) ** 2)
+                loss += distance.mean()  # Среднее расстояние
+        return loss / len(pred_boxes) if len(pred_boxes) > 0 else 0
+
 # Инициализация
 train_images, val_images = train_test_split(
     all_images, test_size=0.2, random_state=42
@@ -96,7 +121,7 @@ val_dataset = SpotsOfInterestDataset(val_images)
 train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 detector = FullDetector().to(device)
-optim_detector = optim.Adam(detector.parameters(), lr=0.00002, weight_decay=0.01)
+optim_detector = optim.Adam(detector.parameters(), lr=0.0002, weight_decay=0.01)
 all_losses = []
 all_val_losses = []
 
@@ -104,7 +129,9 @@ def rmse_loss(pred, target):
     return torch.sqrt(torch.nn.L1Loss(pred, target) + 1e-7)
 
 # Использование
-loss_fn = RMSELoss()
+# loss_fn = RMSELoss()
+# loss_fn = CustomDistanceLoss()
+loss_fn = torch.nn.L1Loss()
 # Тренировка
 def one_epoch():
     detector.train()
