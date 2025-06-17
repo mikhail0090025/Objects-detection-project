@@ -62,18 +62,24 @@ class ObjectsDetector(nn.Module):
             nn.BatchNorm2d(32),
             nn.LeakyReLU(0.2),
             ResidualBlock(32, 32, stride=2),  # 800x400 => 400x200
-            ResidualBlock(32, 64, stride=2),  # 400x200 => 200x100
-            ResidualBlock(64, 64, stride=1),  # 200x100 => 200x100
+            ResidualBlock(32, 32, stride=2),  # 400x200 => 200x100
+            ResidualBlock(32, 32, stride=2),  # 200x100 => 100x50
+            ResidualBlock(32, 32, stride=2),  # 100x50 => 50x25
         )
         # Head для предсказания боксов
         self.head = nn.Sequential(
-            nn.Conv2d(64, 32, 3, padding=1),  # 200x100 => 200x100
+            nn.Conv2d(32, 32, 3, padding=1),  # 50x25 => 50x25
             nn.BatchNorm2d(32),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 16, 3, padding=1),  # 200x100 => 200x100
+            nn.Conv2d(32, 16, 3, padding=1),  # 50x25 => 50x25
             nn.BatchNorm2d(16),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(16, 4, 3, padding=1),  # 200x100 => 200x100 (4 канала для боксов)
+            nn.Conv2d(16, 4, 3, padding=1),  # 50x25 => 50x25 (4 канала для боксов)
+            nn.Flatten(),
+            nn.Linear(50*25*4, max_objects * 4),
+            nn.LeakyReLU(0.2),
+            nn.Linear(max_objects * 4, max_objects * 4),
+            nn.Unflatten(1, (7, 4)),
             nn.Sigmoid()
         )
         self.max_objects = max_objects
@@ -82,15 +88,43 @@ class ObjectsDetector(nn.Module):
         x = self.backbone(x)  # (batch_size, 64, 252, 119)
         x = self.head(x)  # (batch_size, 4, 252, 119)
         # Глобальный пулинг для получения фиксированного числа боксов
-        x = x.mean([2, 3])  # (batch_size, 4) -> усредняем по пространству
-        x = x.view(x.size(0), self.max_objects, 4)  # (batch_size, max_objects, 4)
         x = x.clamp(0, 1)  # Ограничиваем [0, 1]
+        return x
+
+class VggObjectsDetector(nn.Module):
+    def __init__(self, max_objects=7):
+        super(VggObjectsDetector, self).__init__()
+        # Backbone с остаточными связями
+        from torchvision.models import vgg16, vgg16_bn, vgg11_bn
+        self.vgg = vgg11_bn(pretrained=True).features
+        for param in self.vgg.parameters():
+            param.requires_grad = False
+        self.head = nn.Sequential(
+            nn.Conv2d(512, 64, 3, padding=1),  # 7x7x512 -> 7x7x64
+            nn.ReLU(),
+            nn.Conv2d(64, max_objects * 4, 1),  # 7x7x64 -> 7x7x(max_objects*4)
+            nn.Flatten(),
+            nn.Linear(7*7*max_objects*4, 512),
+            nn.LayerNorm(512),
+            nn.LeakyReLU(0.2),
+            nn.Linear(512, 64),
+            nn.LayerNorm(64),
+            nn.LeakyReLU(0.2),
+            nn.Linear(64, max_objects * 4),
+            nn.Unflatten(1, (max_objects, 4)),
+            nn.Sigmoid()
+        )
+        self.max_objects = max_objects
+
+    def forward(self, x):
+        x = self.vgg(x)
+        x = self.head(x)
         return x
 
 class FullDetector(nn.Module):
     def __init__(self):
         super(FullDetector, self).__init__()
-        self.objects_detector = ObjectsDetector()
+        self.objects_detector = VggObjectsDetector()
 
     def forward(self, x):
         return self.objects_detector(x)
@@ -142,10 +176,10 @@ train_images, val_images = train_test_split(
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 train_dataset = SpotsOfInterestDataset(train_images)
 val_dataset = SpotsOfInterestDataset(val_images)
-train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+val_dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False)
 detector = FullDetector().to(device)
-optim_detector = optim.Adam(detector.parameters(), lr=0.0002, weight_decay=0.01)
+optim_detector = optim.Adam(detector.parameters(), lr=0.00002, weight_decay=0.01)
 all_losses = []
 all_val_losses = []
 

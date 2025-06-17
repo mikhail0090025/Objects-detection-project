@@ -6,7 +6,7 @@ from PIL import Image
 path_to_annotations = os.path.join('MyDataset', 'annotations.json')
 annotations = None
 initial_size = (1008 * 4, 477 * 4)
-start_size = (800, 400)
+start_size = (224, 224)
 max_objects = 7
 all_images = []
 
