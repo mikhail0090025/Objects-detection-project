@@ -11,6 +11,33 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from my_dataset_handler import all_images, start_size, initial_size, max_objects
 import math
+import cv2
+
+def get_selective_search_proposals(image):
+    # Преобразуем изображение в RGB (OpenCV использует BGR по умолчанию)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
+    # Инициализируем Selective Search
+    ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
+    ss.setBaseImage(image)
+    
+    # Настраиваем стратегию (можно менять)
+    ss.switchToSelectiveSearchQuality()  # Или switchToSelectiveSearchFast() для скорости
+    
+    # Получаем регионы
+    rects = ss.process()
+    
+    # Ограничиваем число регионов (например, 2000)
+    rects = rects[:2000]
+    
+    # Преобразуем в список координат [x1, y1, x2, y2]
+    proposals = []
+    for rect in rects:
+        x, y, w, h = rect
+        x2, y2 = x + w, y + h
+        proposals.append([x, y, x2, y2])
+    
+    return np.array(proposals)
 
 class SpotsOfInterestDataset(Dataset):
     def __init__(self, all_images):
@@ -117,6 +144,9 @@ class VggObjectsDetector(nn.Module):
         self.max_objects = max_objects
 
     def forward(self, x):
+        places_of_interest = get_selective_search_proposals(cv2.imread("MyDataset/IMG_20250615_154406.jpg"))
+        print(places_of_interest.shape)
+        print(places_of_interest[0])
         x = self.vgg(x)
         x = self.head(x)
         return x
@@ -179,7 +209,7 @@ val_dataset = SpotsOfInterestDataset(val_images)
 train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
 val_dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False)
 detector = FullDetector().to(device)
-optim_detector = optim.Adam(detector.parameters(), lr=0.00002, weight_decay=0.01)
+optim_detector = optim.Adam(detector.parameters(), lr=0.0001, weight_decay=0.01)
 all_losses = []
 all_val_losses = []
 
