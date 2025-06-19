@@ -106,9 +106,10 @@ class FeatureMapNet(nn.Module):
 class FasterRCNN(nn.Module):
     def __init__(self, max_objects=7):
         super(FasterRCNN, self).__init__()
-        
+        self.feature = FeatureMapNet()
 
     def forward(self, x):
+        x = self.feature(x)
         return x
 
 class RMSELoss(nn.Module):
@@ -160,7 +161,7 @@ train_dataset = SpotsOfInterestDataset(train_images)
 val_dataset = SpotsOfInterestDataset(val_images)
 train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
 val_dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False)
-detector = FullDetector().to(device)
+detector = FasterRCNN().to(device)
 optim_detector = optim.Adam(detector.parameters(), lr=0.0001, weight_decay=0.01)
 all_losses = []
 all_val_losses = []
