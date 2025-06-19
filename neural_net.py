@@ -41,6 +41,17 @@ def get_selective_search_proposals(image):
 
 class SpotsOfInterestDataset(Dataset):
     def __init__(self, all_images):
+        for img in all_images:
+            img.image = img.image + 1
+            img.image = img.image * 127.5
+            img.image = img.image.astype(np.uint8)
+            print('img')
+            print(img.image)
+            print(img.image.min())
+            print(img.image.max())
+            print(img.image.shape)
+            Image.fromarray(img.image).save("tmp.jpg")
+            img.image = cv2.imread("tmp.jpg")
         self.inputs = np.array([img.image for img in all_images])
         self.outputs = np.array([img.output for img in all_images])
         # Преобразуем изображения
@@ -80,84 +91,25 @@ class ResidualBlock(nn.Module):
         out = self.relu(out)
         return out
 
-class ObjectsDetector(nn.Module):
+class FeatureMapNet(nn.Module):
     def __init__(self, max_objects=7):
-        super(ObjectsDetector, self).__init__()
-        # Backbone с остаточными связями
-        self.backbone = nn.Sequential(
-            nn.Conv2d(3, 32, 3, padding=1, stride=1),  # 800x400 => 800x400
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(0.2),
-            ResidualBlock(32, 32, stride=2),  # 800x400 => 400x200
-            ResidualBlock(32, 32, stride=2),  # 400x200 => 200x100
-            ResidualBlock(32, 32, stride=2),  # 200x100 => 100x50
-            ResidualBlock(32, 32, stride=2),  # 100x50 => 50x25
-        )
-        # Head для предсказания боксов
-        self.head = nn.Sequential(
-            nn.Conv2d(32, 32, 3, padding=1),  # 50x25 => 50x25
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 16, 3, padding=1),  # 50x25 => 50x25
-            nn.BatchNorm2d(16),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(16, 4, 3, padding=1),  # 50x25 => 50x25 (4 канала для боксов)
-            nn.Flatten(),
-            nn.Linear(50*25*4, max_objects * 4),
-            nn.LeakyReLU(0.2),
-            nn.Linear(max_objects * 4, max_objects * 4),
-            nn.Unflatten(1, (7, 4)),
-            nn.Sigmoid()
-        )
-        self.max_objects = max_objects
-
-    def forward(self, x):
-        x = self.backbone(x)  # (batch_size, 64, 252, 119)
-        x = self.head(x)  # (batch_size, 4, 252, 119)
-        # Глобальный пулинг для получения фиксированного числа боксов
-        x = x.clamp(0, 1)  # Ограничиваем [0, 1]
-        return x
-
-class VggObjectsDetector(nn.Module):
-    def __init__(self, max_objects=7):
-        super(VggObjectsDetector, self).__init__()
-        # Backbone с остаточными связями
+        super(FeatureMapNet, self).__init__()
         from torchvision.models import vgg16, vgg16_bn, vgg11_bn
         self.vgg = vgg11_bn(pretrained=True).features
         for param in self.vgg.parameters():
             param.requires_grad = False
-        self.head = nn.Sequential(
-            nn.Conv2d(512, 64, 3, padding=1),  # 7x7x512 -> 7x7x64
-            nn.ReLU(),
-            nn.Conv2d(64, max_objects * 4, 1),  # 7x7x64 -> 7x7x(max_objects*4)
-            nn.Flatten(),
-            nn.Linear(7*7*max_objects*4, 512),
-            nn.LayerNorm(512),
-            nn.LeakyReLU(0.2),
-            nn.Linear(512, 64),
-            nn.LayerNorm(64),
-            nn.LeakyReLU(0.2),
-            nn.Linear(64, max_objects * 4),
-            nn.Unflatten(1, (max_objects, 4)),
-            nn.Sigmoid()
-        )
-        self.max_objects = max_objects
 
     def forward(self, x):
-        places_of_interest = get_selective_search_proposals(cv2.imread("MyDataset/IMG_20250615_154406.jpg"))
-        print(places_of_interest.shape)
-        print(places_of_interest[0])
         x = self.vgg(x)
-        x = self.head(x)
         return x
 
-class FullDetector(nn.Module):
-    def __init__(self):
-        super(FullDetector, self).__init__()
-        self.objects_detector = VggObjectsDetector()
+class FasterRCNN(nn.Module):
+    def __init__(self, max_objects=7):
+        super(FasterRCNN, self).__init__()
+        
 
     def forward(self, x):
-        return self.objects_detector(x)
+        return x
 
 class RMSELoss(nn.Module):
     def __init__(self):
