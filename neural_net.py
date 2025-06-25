@@ -13,6 +13,72 @@ from my_dataset_handler import all_images, start_size, initial_size, max_objects
 import math
 import cv2
 
+def compute_iou(anchors, gt_boxes):
+    # anchors: [N, 4] — [x1, y1, x2, y2]
+    # gt_boxes: [M, 4] — [x1, y1, x2, y2]
+    N, M = anchors.shape[0], gt_boxes.shape[0]
+    anchors_area = (anchors[:, 2] - anchors[:, 0]) * (anchors[:, 3] - anchors[:, 1])
+    gt_area = (gt_boxes[:, 2] - gt_boxes[:, 0]) * (gt_boxes[:, 3] - gt_boxes[:, 1])
+    
+    x1 = torch.max(anchors[:, 0].unsqueeze(1), gt_boxes[:, 0].unsqueeze(0))
+    y1 = torch.max(anchors[:, 1].unsqueeze(1), gt_boxes[:, 1].unsqueeze(0))
+    x2 = torch.min(anchors[:, 2].unsqueeze(1), gt_boxes[:, 2].unsqueeze(0))
+    y2 = torch.min(anchors[:, 3].unsqueeze(1), gt_boxes[:, 3].unsqueeze(0))
+    
+    inter = torch.clamp(x2 - x1, min=0) * torch.clamp(y2 - y1, min=0)
+    union = anchors_area.unsqueeze(1) + gt_area.unsqueeze(0) - inter
+    iou = inter / (union + 1e-6)
+    return iou
+
+def compute_reg_targets(anchors, gt_boxes):
+    # Вычисляем [dx, dy, dw, dh]
+    anchor_w = anchors[:, 2] - anchors[:, 0]
+    anchor_h = anchors[:, 3] - anchors[:, 1]
+    anchor_cx = anchors[:, 0] + anchor_w / 2
+    anchor_cy = anchors[:, 1] + anchor_h / 2
+    
+    gt_w = gt_boxes[:, 2] - gt_boxes[:, 0]
+    gt_h = gt_boxes[:, 3] - gt_boxes[:, 1]
+    gt_cx = gt_boxes[:, 0] + gt_w / 2
+    gt_cy = gt_boxes[:, 1] + gt_h / 2
+    
+    dx = (gt_cx - anchor_cx) / anchor_w
+    dy = (gt_cy - anchor_cy) / anchor_h
+    dw = torch.log(gt_w / anchor_w)
+    dh = torch.log(gt_h / anchor_h)
+    
+    return torch.stack([dx, dy, dw, dh], dim=1)
+
+def prepare_rpn_targets(anchors, annotations):
+    ious = compute_iou(anchors, annotations)
+    max_ious, gt_indices = ious.max(dim=1)
+    
+    targets_cls = torch.zeros(len(anchors), dtype=torch.long, device=anchors.device)
+    targets_cls[max_ious >= 0.7] = 1  # Объект
+    targets_cls[max_ious < 0.3] = 0   # Фон
+    mask = (max_ious >= 0.7)  # Учитываем только объекты для регрессии
+    
+    targets_reg = torch.zeros(len(anchors), 4, device=anchors.device)
+    if mask.sum() > 0:
+        targets_reg[mask] = compute_reg_targets(anchors[mask], annotations[gt_indices[mask]])
+    
+    return targets_cls, targets_reg, mask
+
+def prepare_cls_targets(filtered_anchors, annotations):
+    ious = compute_iou(filtered_anchors, annotations[:, :4])  # Предполагаем, что annotations — [N, 5] с [x1, y1, x2, y2, class]
+    max_ious, gt_indices = ious.max(dim=1)
+    
+    targets_cls = torch.zeros(len(filtered_anchors), dtype=torch.long, device=filtered_anchors.device)
+    mask = max_ious > 0.5  # Порог для классификатора
+    targets_cls[mask] = annotations[gt_indices[mask], 4].long()  # Класс из аннотаций
+    targets_cls[~mask] = 0  # Фон
+    
+    targets_bbox = torch.zeros(len(filtered_anchors), 4, device=filtered_anchors.device)
+    if mask.sum() > 0:
+        targets_bbox[mask] = compute_reg_targets(filtered_anchors[mask], annotations[gt_indices[mask], :4])
+    
+    return targets_cls, targets_bbox, mask
+
 def get_selective_search_proposals(image):
     # Преобразуем изображение в RGB (OpenCV использует BGR по умолчанию)
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -39,17 +105,46 @@ def get_selective_search_proposals(image):
     
     return np.array(proposals)
 
+def generate_anchors(feature_map_size, img_size, scales=[128, 256, 512], ratios=[0.5, 1, 2]):
+    # feature_map_size: [H, W] размера feature map
+    # img_size: [H, W] исходного изображения
+    # scales и ratios для создания якорей
+    print(feature_map_size)
+    print(img_size)
+    anchors = []
+    width_fm, height_fm = feature_map_size
+    img_width, img_height = img_size
+    strideX = img_width / width_fm
+    strideY = img_height / height_fm
+    
+    for h in range(height_fm):
+        for w in range(width_fm):
+            for scale in scales:
+                for ratio in ratios:
+                    # Центр якора в пространстве изображения
+                    center_h = (h + 0.5) * strideX
+                    center_w = (w + 0.5) * strideY
+                    
+                    # Размеры якорей в пикселях изображения
+                    h_ = math.sqrt(scale * scale / ratio)
+                    w_ = h_ * ratio
+                    
+                    # Координаты [x1, y1, x2, y2] в пикселях изображения
+                    x1 = max(0, center_w - w_ / 2)
+                    y1 = max(0, center_h - h_ / 2)
+                    x2 = min(img_width, center_w + w_ / 2)
+                    y2 = min(img_height, center_h + h_ / 2)
+                    
+                    anchors.append([x1, y1, x2, y2])
+    
+    return torch.tensor(anchors, dtype=torch.float32)
+
 class SpotsOfInterestDataset(Dataset):
     def __init__(self, all_images):
         for img in all_images:
             img.image = img.image + 1
             img.image = img.image * 127.5
             img.image = img.image.astype(np.uint8)
-            print('img')
-            print(img.image)
-            print(img.image.min())
-            print(img.image.max())
-            print(img.image.shape)
             Image.fromarray(img.image).save("tmp.jpg")
             img.image = cv2.imread("tmp.jpg")
         self.inputs = np.array([img.image for img in all_images])
@@ -92,7 +187,7 @@ class ResidualBlock(nn.Module):
         return out
 
 class FeatureMapNet(nn.Module):
-    def __init__(self, max_objects=7):
+    def __init__(self):
         super(FeatureMapNet, self).__init__()
         from torchvision.models import vgg16, vgg16_bn, vgg11_bn
         self.vgg = vgg11_bn(pretrained=True).features
@@ -103,14 +198,165 @@ class FeatureMapNet(nn.Module):
         x = self.vgg(x)
         return x
 
-class FasterRCNN(nn.Module):
-    def __init__(self, max_objects=7):
-        super(FasterRCNN, self).__init__()
-        self.feature = FeatureMapNet()
+class MyBackbone(nn.Module):
+    def __init__(self, output_size=(14,14)):
+        super(MyBackbone, self).__init__()
+        self.all_layers = nn.Sequential(
+            ResidualBlock(3, 32, 1), # x1
+            ResidualBlock(32, 32, 2), # x2
+            ResidualBlock(32, 64, 2), # x4
+            ResidualBlock(64, 128, 2), # x8
+            ResidualBlock(128, 256, 2), # x16
+            ResidualBlock(256, 512, 2), # x32
+            nn.AdaptiveAvgPool2d(output_size),
+        )
 
     def forward(self, x):
-        x = self.feature(x)
+        x = self.all_layers(x)
         return x
+
+class RoI(nn.Module):
+    def __init__(self):
+        super(RoI, self).__init__()
+        self.main_layer = nn.AdaptiveMaxPool2d(7)
+
+    def forward(self, x):
+        x = self.main_layer(x)
+        return x
+
+feat_map_channels = 512  # Каналы feature map (например, из VGG16)
+classes = 2
+anchors_scales = [128, 256, 512]
+anchors_ratios = [0.5, 1, 2]
+num_anchors = len(anchors_scales) * len(anchors_ratios)
+classes_ = classes
+
+class RPN(nn.Module):
+    def __init__(self):
+        super(RPN, self).__init__()
+        
+        # Слои RPN
+        self.conv1 = nn.Conv2d(feat_map_channels, 512, kernel_size=3, padding=1)
+        self.cls_layer = nn.Conv2d(512, num_anchors * 2, kernel_size=1)  # 2 класса: объект/фон
+        self.reg_layer = nn.Conv2d(512, num_anchors * 4, kernel_size=1)  # 4 координаты на якорь
+        
+        # Инициализация весов
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.xavier_uniform_(m.weight)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        # x: feature map, например, [batch_size, 512, H, W]
+        batch_size = x.size(0)
+        
+        # Свёрточный слой для извлечения признаков
+        x = torch.nn.functional.relu(self.conv1(x))
+        
+        # Предсказание вероятностей (объект/фон)
+        cls = self.cls_layer(x)  # [batch_size, 18, H, W] (9 якорей x 2 класса)
+        cls = cls.permute(0, 2, 3, 1).contiguous()  # [batch_size, H, W, 18]
+        cls = cls.view(batch_size, -1, 2)  # [batch_size, H*W*9, 2]
+        
+        # Предсказание координат (регрессия)
+        reg = self.reg_layer(x)  # [batch_size, 36, H, W] (9 якорей x 4 координаты)
+        reg = reg.permute(0, 2, 3, 1).contiguous()  # [batch_size, H, W, 36]
+        reg = reg.view(batch_size, -1, 4)  # [batch_size, H*W*9, 4]
+        
+        return cls, reg
+
+class Classifier(nn.Module):
+    def __init__(self):
+        super(Classifier, self).__init__()
+        self.conv1 = nn.Conv2d(512, 1024, kernel_size=1, stride=7)  # Уменьшили каналы до 1024
+        self.relu = nn.ReLU()
+        self.flatten = nn.Flatten()
+        self.output = nn.Linear(1024, classes + 1)
+        self.softmax = nn.Softmax(dim=-1)  # Явно указываем dim=-1
+
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.relu(x)
+        x = self.flatten(x)
+        x = self.output(x)
+        return x
+
+class FasterRCNN(nn.Module):
+    def __init__(self):
+        super(FasterRCNN, self).__init__()
+        self.feature = MyBackbone()
+        self.rpn = RPN()
+        from torchvision.ops import RoIAlign
+        self.roi_align = RoIAlign((7, 7), spatial_scale=1.0, sampling_ratio=2, aligned=True)
+        self.classifier = Classifier()
+        self.bbox_regressor = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(512 * 7 * 7, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 4)
+        )
+
+    def forward(self, x):
+        import time
+        print("Images count in batch: ", x.shape[0])
+        # Получаем feature map
+        feature_map = self.feature(x)
+        batch_size, channels, width_fm, height_fm = feature_map.shape
+        # Генерируем якоря
+        anchors = generate_anchors([width_fm, height_fm], [x.shape[2], x.shape[3]], scales=anchors_scales, ratios=anchors_ratios)
+        
+        # Получаем предсказания от RPN
+        cls_scores, reg_coords = self.rpn(feature_map)
+        scores = torch.softmax(cls_scores[0], dim=-1)[:, 1]
+        _, topk_indices = torch.topk(scores, min(2000, len(scores)))  # Берем топ-2000 регионов
+        filtered_anchors = anchors[topk_indices]
+
+        # Подготовка координат для RoIAlign
+        batch_indices = torch.zeros(len(filtered_anchors), dtype=torch.long).to(x.device)
+        rois_coords = torch.stack([batch_indices, filtered_anchors[:, 0], filtered_anchors[:, 1],
+                                filtered_anchors[:, 2], filtered_anchors[:, 3]], dim=1).float()
+        
+        # Вырезаем регионы с помощью RoIAlign
+        rois = self.roi_align(feature_map, rois_coords)
+        
+        # Классификация регионов
+        classes = self.classifier(rois)
+        class_probs = torch.softmax(classes, dim=-1)
+        
+        # Векторизованная фильтрация фоновых регионов
+        max_confidence, _ = torch.max(class_probs, dim=-1)  # [num_rois]
+        uniform_threshold = 1.0 / (classes_ + 1)  # Явно задаём скаляр (classes + 1 = 8)
+        uniform_threshold = 1
+        background_mask = (class_probs[:, -1] == max_confidence) | (class_probs[:, -1] > uniform_threshold)
+        keep_mask = ~background_mask
+        
+        rois = rois[keep_mask]
+        class_probs = class_probs[keep_mask]
+        
+        bbox = self.bbox_regressor(rois)
+        
+        print("RoIs shape:", rois.shape)
+        
+        return cls_scores, reg_coords, classes, bbox, filtered_anchors, anchors
+
+frcnn = FasterRCNN()
+frcnn(torch.rand(8, 3, 640, 480))
+print('-----')
 
 class RMSELoss(nn.Module):
     def __init__(self):
@@ -136,12 +382,6 @@ class CustomDistanceLoss(nn.Module):
             valid_target = target
             if len(valid_pred) > 0 and len(valid_target) > 0:
                 # Центр бокса для расстояния
-                print('--------------------')
-                print('valid_pred')
-                print(valid_pred)
-                print('valid_target')
-                print(valid_target)
-                print('--------------------')
                 pred_center_x = (valid_pred[:, 0] + valid_pred[:, 2]) / 2
                 pred_center_y = (valid_pred[:, 1] + valid_pred[:, 3]) / 2
                 target_center_x = (valid_target[:, 0] + valid_target[:, 2]) / 2
@@ -169,45 +409,66 @@ all_val_losses = []
 def rmse_loss(pred, target):
     return torch.sqrt(torch.nn.L1Loss(pred, target) + 1e-7)
 
-# Использование
-# loss_fn = RMSELoss()
-# loss_fn = CustomDistanceLoss()
-loss_fn = torch.nn.L1Loss()
 # Тренировка
 def one_epoch():
     detector.train()
     epoch_loss = 0
     val_loss = 0
-    for i, (images, targets) in enumerate(train_dataloader):
-        images, targets = images.to(device), targets.to(device)
-        optim_detector.zero_grad()
-        output = detector(images)
-        loss = loss_fn(output, targets)
+    
+    for i, (images, annotations) in enumerate(train_dataloader):
+        print("annotations.shape", annotations.shape)
+        print("images.shape", images.shape)
+        images = images.to(device)
+        annotations = annotations.to(device)  # [batch, max_objects, 5] — [x1, y1, x2, y2, class]
+        
+        # Предсказания
+        cls_scores, reg_coords, classes, bbox, filtered_anchors, anchors = detector(images)
+        
+        # Метки для RPN
+        targets_rpn_cls, targets_rpn_reg, rpn_mask = prepare_rpn_targets(anchors, annotations[0, :annotations[0, :, 4] != -1])  # Учитываем только валидные объекты
+        
+        # Потери RPN
+        loss_rpn_cls = nn.functional.cross_entropy(cls_scores[0], targets_rpn_cls)
+        loss_rpn_reg = nn.functional.smooth_l1_loss(reg_coords[0, rpn_mask], targets_rpn_reg[rpn_mask])
+        
+        # Метки для классификатора
+        targets_cls, targets_bbox, cls_mask = prepare_cls_targets(filtered_anchors, annotations[0, :annotations[0, :, 4] != -1])
+        
+        # Потери классификатора
+        loss_cls = nn.functional.cross_entropy(classes, targets_cls)
+        loss_bbox = nn.functional.smooth_l1_loss(bbox[cls_mask], targets_bbox[cls_mask]) if cls_mask.sum() > 0 else torch.tensor(0.0, device=device)
+        
+        # Общая потеря
+        loss = loss_rpn_cls + loss_rpn_reg + loss_cls + loss_bbox
         loss.backward()
         optim_detector.step()
+        optim_detector.zero_grad()
         epoch_loss += loss.item()
-        # print(f"Batch {i+1}/{len(train_dataloader)}: Loss: {loss.item():.4f}")
+    
+    # Валидация
+    detector.eval()
     with torch.no_grad():
-        for i, (images, targets) in enumerate(val_dataloader):
-            images, targets = images.to(device), targets.to(device)
-            optim_detector.zero_grad()
-            output = detector(images)
-            loss = loss_fn(output, targets)
+        for i, (images, annotations) in enumerate(val_dataloader):
+            images = images.to(device)
+            annotations = annotations.to(device)
+            cls_scores, reg_coords, classes, bbox, filtered_anchors, anchors = detector(images)
+            
+            targets_rpn_cls, targets_rpn_reg, rpn_mask = prepare_rpn_targets(anchors, annotations[0, :annotations[0, :, 4] != -1])
+            loss_rpn_cls = nn.functional.cross_entropy(cls_scores[0], targets_rpn_cls)
+            loss_rpn_reg = nn.functional.smooth_l1_loss(reg_coords[0, rpn_mask], targets_rpn_reg[rpn_mask])
+            
+            targets_cls, targets_bbox, cls_mask = prepare_cls_targets(filtered_anchors, annotations[0, :annotations[0, :, 4] != -1])
+            loss_cls = nn.functional.cross_entropy(classes, targets_cls)
+            loss_bbox = nn.functional.smooth_l1_loss(bbox[cls_mask], targets_bbox[cls_mask]) if cls_mask.sum() > 0 else torch.tensor(0.0, device=device)
+            
+            loss = loss_rpn_cls + loss_rpn_reg + loss_cls + loss_bbox
             val_loss += loss.item()
-            # print(f"Batch {i+1}/{len(train_dataloader)}: Loss: {loss.item():.4f}")
-
-    epoch_loss = epoch_loss / len(train_dataloader)
-    val_loss = val_loss / len(val_dataloader)
+    
+    epoch_loss /= len(train_dataloader)
+    val_loss /= len(val_dataloader)
     all_losses.append(epoch_loss)
     all_val_losses.append(val_loss)
     return epoch_loss, val_loss
-
-def go_epochs(epochs_count):
-    loss, val_loss = (0,0)
-    for i in range(epochs_count):
-        loss, val_loss = one_epoch()
-        print(f"Epoch {i+1}/{epochs_count}, loss: {loss}, val loss: {val_loss}")
-    return loss, val_loss
 
 # Vizualization
 def show_graphics():
@@ -215,3 +476,5 @@ def show_graphics():
     plt.plot(all_val_losses, color="orange")
     plt.grid()
     plt.show()
+
+one_epoch()
