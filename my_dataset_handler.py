@@ -6,9 +6,11 @@ from PIL import Image
 path_to_annotations = os.path.join('MyDataset', 'annotations.json')
 annotations = None
 initial_size = (4032, 1908)
-start_size = (1344, 636)
+# start_size = (1344, 636)
+start_size = (1008, 477)
 max_objects = 7
 all_images = []
+classes_count = 2
 
 class OneObject:
     def __init__(self, image_path, annotations):
@@ -18,14 +20,16 @@ class OneObject:
         for annotation in annotations:
             obj_box = annotation['box']
             obj_class = annotation['class']
+            classes = [1, 0] if obj_class == "transistor" else [0, 1]
+            print("Classes: ", classes)
             if max(obj_box) > 1:
                 obj_box[0] = obj_box[0] / initial_size[0]
                 obj_box[2] = obj_box[2] / initial_size[0]
                 obj_box[1] = obj_box[1] / initial_size[1]
                 obj_box[3] = obj_box[3] / initial_size[1]
-            self.output.append(obj_box)
+            self.output.append(obj_box + classes)
         while len(self.output) < max_objects:
-            self.output.append([0,0,0,0])
+            self.output.append([0 for _ in range(4 + classes_count)])
         
         self.output = np.array(self.output)
     

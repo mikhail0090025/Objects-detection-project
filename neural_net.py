@@ -14,20 +14,33 @@ import math
 import cv2
 
 def compute_iou(anchors, gt_boxes):
-    # anchors: [N, 4] — [x1, y1, x2, y2]
-    # gt_boxes: [M, 4] — [x1, y1, x2, y2]
-    N, M = anchors.shape[0], gt_boxes.shape[0]
-    anchors_area = (anchors[:, 2] - anchors[:, 0]) * (anchors[:, 3] - anchors[:, 1])
-    gt_area = (gt_boxes[:, 2] - gt_boxes[:, 0]) * (gt_boxes[:, 3] - gt_boxes[:, 1])
+    N = anchors.size(0)
+    batch_size = gt_boxes.size(0)
+    num_boxes = gt_boxes.size(1)  # 6
+    iou = torch.zeros(N, num_boxes * batch_size).to(anchors.device)
     
-    x1 = torch.max(anchors[:, 0].unsqueeze(1), gt_boxes[:, 0].unsqueeze(0))
-    y1 = torch.max(anchors[:, 1].unsqueeze(1), gt_boxes[:, 1].unsqueeze(0))
-    x2 = torch.min(anchors[:, 2].unsqueeze(1), gt_boxes[:, 2].unsqueeze(0))
-    y2 = torch.min(anchors[:, 3].unsqueeze(1), gt_boxes[:, 3].unsqueeze(0))
+    for i in range(batch_size):
+        gt_coords = gt_boxes[i, :, :4]  # Берем только [x1, y1, x2, y2], форма [6, 4]
+        print("Shape 1: ", anchors[:, 0].unsqueeze(1).shape, gt_coords[:, 0].unsqueeze(0).shape)
+        print("Shape 2: ", anchors[:, 0].shape, gt_coords[:, 0].shape)
+        print("Shape 3: ", anchors.shape, gt_coords.shape)
+        print("Shape 4: ", gt_boxes.shape)
+        print("--------------------------------")
+        x1 = torch.max(anchors[:, 0].unsqueeze(1), gt_coords[:, 0].unsqueeze(0))  # [1764, 6]
+        y1 = torch.max(anchors[:, 1].unsqueeze(1), gt_coords[:, 1].unsqueeze(0))
+        x2 = torch.min(anchors[:, 2].unsqueeze(1), gt_coords[:, 2].unsqueeze(0))
+        y2 = torch.min(anchors[:, 3].unsqueeze(1), gt_coords[:, 3].unsqueeze(0))
+        
+        inter_width = torch.clamp(x2 - x1, min=0)
+        inter_height = torch.clamp(y2 - y1, min=0)
+        inter_area = inter_width * inter_height
+        
+        anchor_area = (anchors[:, 2] - anchors[:, 0]) * (anchors[:, 3] - anchors[:, 1])
+        gt_area = (gt_coords[:, 2] - gt_coords[:, 0]) * (gt_coords[:, 3] - gt_coords[:, 1])
+        
+        union_area = anchor_area.unsqueeze(1) + gt_area.unsqueeze(0) - inter_area
+        iou[:, i * num_boxes:(i + 1) * num_boxes] = inter_area / (union_area + 1e-6)
     
-    inter = torch.clamp(x2 - x1, min=0) * torch.clamp(y2 - y1, min=0)
-    union = anchors_area.unsqueeze(1) + gt_area.unsqueeze(0) - inter
-    iou = inter / (union + 1e-6)
     return iou
 
 def compute_reg_targets(anchors, gt_boxes):
@@ -64,18 +77,37 @@ def prepare_rpn_targets(anchors, annotations):
     
     return targets_cls, targets_reg, mask
 
-def prepare_cls_targets(filtered_anchors, annotations):
-    ious = compute_iou(filtered_anchors, annotations[:, :4])  # Предполагаем, что annotations — [N, 5] с [x1, y1, x2, y2, class]
-    max_ious, gt_indices = ious.max(dim=1)
+def prepare_cls_targets(filtered_anchors, annotations, batch_index=0):
+    # Берем аннотации только для одного изображения (batch_index)
+    annotations_img = annotations[batch_index]  # [7, 6]
     
+    # Фильтруем валидные объекты (предполагаем, что -1 в class_id означает "нет объекта")
+    valid_anno = annotations_img[annotations_img[:, 4] != -1]  # [M, 6], где M — число реальных объектов
+    
+    if valid_anno.size(0) == 0:
+        # Если нет объектов, все якоря — фон
+        targets_cls = torch.zeros(len(filtered_anchors), dtype=torch.long, device=filtered_anchors.device)
+        targets_bbox = torch.zeros(len(filtered_anchors), 4, device=filtered_anchors.device)
+        mask = torch.zeros(len(filtered_anchors), dtype=torch.bool, device=filtered_anchors.device)
+        return targets_cls, targets_bbox, mask
+    
+    # Вычисляем IoU между якорями и ground truth боксами
+    ious = compute_iou(filtered_anchors, valid_anno[:, :4])  # [N, M], где N — число якорей
+    max_ious, gt_indices = ious.max(dim=1)  # [N], [N]
+    
+    # Инициализируем целевые классы
     targets_cls = torch.zeros(len(filtered_anchors), dtype=torch.long, device=filtered_anchors.device)
-    mask = max_ious > 0.5  # Порог для классификатора
-    targets_cls[mask] = annotations[gt_indices[mask], 4].long()  # Класс из аннотаций
+    mask = max_ious > 0.5  # Порог для классификации
+    
+    if mask.sum() > 0:
+        # Присваиваем классы для якорей с IoU > 0.5
+        targets_cls[mask] = valid_anno[gt_indices[mask], 4].long()
     targets_cls[~mask] = 0  # Фон
     
+    # Инициализируем целевые координаты
     targets_bbox = torch.zeros(len(filtered_anchors), 4, device=filtered_anchors.device)
     if mask.sum() > 0:
-        targets_bbox[mask] = compute_reg_targets(filtered_anchors[mask], annotations[gt_indices[mask], :4])
+        targets_bbox[mask] = compute_reg_targets(filtered_anchors[mask], valid_anno[gt_indices[mask], :4])
     
     return targets_cls, targets_bbox, mask
 
@@ -344,6 +376,7 @@ class FasterRCNN(nn.Module):
         uniform_threshold = 1
         background_mask = (class_probs[:, -1] == max_confidence) | (class_probs[:, -1] > uniform_threshold)
         keep_mask = ~background_mask
+        print("Keep mask: ", keep_mask, len([x for x in keep_mask if x == True]))
         
         rois = rois[keep_mask]
         class_probs = class_probs[keep_mask]
@@ -352,7 +385,7 @@ class FasterRCNN(nn.Module):
         
         print("RoIs shape:", rois.shape)
         
-        return cls_scores, reg_coords, classes, bbox, filtered_anchors, anchors
+        return cls_scores, reg_coords, classes, bbox, filtered_anchors, anchors, keep_mask
 
 frcnn = FasterRCNN()
 frcnn(torch.rand(8, 3, 640, 480))
@@ -367,6 +400,30 @@ class RMSELoss(nn.Module):
         l1 = self.l1_loss(pred, target)
         rmse = torch.sqrt(l1 + 1e-7)
         return rmse
+
+class RPNLoss(nn.Module):
+    def __init__(self):
+        super(RPNLoss, self).__init__()
+        self.l1_loss = nn.SmoothL1Loss(reduction='none')  # Без суммирования
+        self.crossentropy_loss = nn.CrossEntropyLoss(reduction='none')
+
+    def forward(self, pred, target, mask):
+        # pred: [reg_coords, cls_scores]
+        # target: [targets_reg, targets_cls]
+        # mask: булева маска положительных якорей [N]
+        
+        reg_pred, cls_pred = pred
+        reg_target, cls_target = target
+        
+        # Потеря классификации для всех якорей
+        loss_cls = self.crossentropy_loss(cls_pred, cls_target)
+        
+        # Потеря регрессии только для положительных якорей
+        loss_reg = self.l1_loss(reg_pred, reg_target)
+        loss_reg = torch.mean(loss_reg[mask]) if mask.sum() > 0 else 0.0  # Среднее по маске
+        
+        # Балансировка (можно добавить вес lambda)
+        return loss_cls.mean() + 10 * loss_reg  # lambda = 10, как в оригинале
 
 class CustomDistanceLoss(nn.Module):
     def __init__(self, max_objects=7):
@@ -402,73 +459,38 @@ val_dataset = SpotsOfInterestDataset(val_images)
 train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
 val_dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False)
 detector = FasterRCNN().to(device)
-optim_detector = optim.Adam(detector.parameters(), lr=0.0001, weight_decay=0.01)
+rpn_loss = RPNLoss()
+optimizer = torch.optim.Adam(detector.parameters(), lr=0.001, weight_decay=0.001)
 all_losses = []
 all_val_losses = []
 
 def rmse_loss(pred, target):
     return torch.sqrt(torch.nn.L1Loss(pred, target) + 1e-7)
 
-# Тренировка
 def one_epoch():
-    detector.train()
-    epoch_loss = 0
-    val_loss = 0
-    
-    for i, (images, annotations) in enumerate(train_dataloader):
-        print("annotations.shape", annotations.shape)
-        print("images.shape", images.shape)
-        images = images.to(device)
-        annotations = annotations.to(device)  # [batch, max_objects, 5] — [x1, y1, x2, y2, class]
+    for images, annotations in train_dataloader:
+        optimizer.zero_grad()
+        targets_reg = annotations
         
-        # Предсказания
-        cls_scores, reg_coords, classes, bbox, filtered_anchors, anchors = detector(images)
+        # Прямой проход
+        cls_scores, reg_coords, classes, bbox, filtered_anchors, anchors, rpn_mask = detector(images)
         
-        # Метки для RPN
-        targets_rpn_cls, targets_rpn_reg, rpn_mask = prepare_rpn_targets(anchors, annotations[0, :annotations[0, :, 4] != -1])  # Учитываем только валидные объекты
+        # Подготовка меток
+        targets_cls, targets_bbox, cls_mask = prepare_cls_targets(filtered_anchors, annotations)
         
-        # Потери RPN
-        loss_rpn_cls = nn.functional.cross_entropy(cls_scores[0], targets_rpn_cls)
-        loss_rpn_reg = nn.functional.smooth_l1_loss(reg_coords[0, rpn_mask], targets_rpn_reg[rpn_mask])
+        # Лосс классификации
+        loss_cls = nn.CrossEntropyLoss()(classes[cls_mask], targets_cls[cls_mask])
         
-        # Метки для классификатора
-        targets_cls, targets_bbox, cls_mask = prepare_cls_targets(filtered_anchors, annotations[0, :annotations[0, :, 4] != -1])
-        
-        # Потери классификатора
-        loss_cls = nn.functional.cross_entropy(classes, targets_cls)
-        loss_bbox = nn.functional.smooth_l1_loss(bbox[cls_mask], targets_bbox[cls_mask]) if cls_mask.sum() > 0 else torch.tensor(0.0, device=device)
+        # Лосс регрессии (и RPN лоссы)
+        loss_bbox = nn.SmoothL1Loss()(bbox[cls_mask], targets_bbox[cls_mask])
+        loss_rpn = rpn_loss((reg_coords, cls_scores), (targets_reg, targets_cls), rpn_mask)
         
         # Общая потеря
-        loss = loss_rpn_cls + loss_rpn_reg + loss_cls + loss_bbox
+        loss = loss_rpn + loss_cls + loss_bbox
         loss.backward()
-        optim_detector.step()
-        optim_detector.zero_grad()
-        epoch_loss += loss.item()
+        optimizer.step()
     
-    # Валидация
-    detector.eval()
-    with torch.no_grad():
-        for i, (images, annotations) in enumerate(val_dataloader):
-            images = images.to(device)
-            annotations = annotations.to(device)
-            cls_scores, reg_coords, classes, bbox, filtered_anchors, anchors = detector(images)
-            
-            targets_rpn_cls, targets_rpn_reg, rpn_mask = prepare_rpn_targets(anchors, annotations[0, :annotations[0, :, 4] != -1])
-            loss_rpn_cls = nn.functional.cross_entropy(cls_scores[0], targets_rpn_cls)
-            loss_rpn_reg = nn.functional.smooth_l1_loss(reg_coords[0, rpn_mask], targets_rpn_reg[rpn_mask])
-            
-            targets_cls, targets_bbox, cls_mask = prepare_cls_targets(filtered_anchors, annotations[0, :annotations[0, :, 4] != -1])
-            loss_cls = nn.functional.cross_entropy(classes, targets_cls)
-            loss_bbox = nn.functional.smooth_l1_loss(bbox[cls_mask], targets_bbox[cls_mask]) if cls_mask.sum() > 0 else torch.tensor(0.0, device=device)
-            
-            loss = loss_rpn_cls + loss_rpn_reg + loss_cls + loss_bbox
-            val_loss += loss.item()
-    
-    epoch_loss /= len(train_dataloader)
-    val_loss /= len(val_dataloader)
-    all_losses.append(epoch_loss)
-    all_val_losses.append(val_loss)
-    return epoch_loss, val_loss
+    print(f"Epoch passed, Loss: {loss.item()}")
 
 # Vizualization
 def show_graphics():
